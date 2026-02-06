@@ -1,0 +1,76 @@
+# Deploy Saleor Dashboard to Azure Web App (Linux container)
+#
+# Prerequisites in Azure:
+# 1. Create a Web App for Containers (Linux).
+# 2. Create an Azure Container Registry (ACR) or use the Web App's built-in ACR.
+# 3. Create an App Registration (Service Principal) and add a federated credential
+#    for GitHub OIDC (Issuer: https://token.actions.githubusercontent.com,
+#    Subject: repo:<your-org>/<your-repo>:ref:refs/heads/<branch>).
+# 4. Grant the App Registration:
+#    - AcrPush on the ACR (so the workflow can push images)
+#    - Website Contributor on the Web App (so the workflow can deploy)
+# 5. Ensure the Web App can pull from ACR (Managed Identity with AcrPull, or ACR admin user).
+#
+# Required GitHub secrets:
+#   AZURE_CLIENT_ID       - Application (client) ID of the App Registration
+#   AZURE_TENANT_ID       - Directory (tenant) ID
+#   AZURE_SUBSCRIPTION_ID - Subscription ID
+#
+# Required GitHub variables:
+#   AZURE_WEBAPP_NAME - Name of the Azure Web App
+#   AZURE_REGISTRY    - ACR name only (e.g. myregistry), not the full .azurecr.io URL
+#
+# Optional: set API_URL, APP_MOUNT_URI, etc. as build args or in Azure Web App
+# Application settings (runtime env for the container).
+
+name: Deploy to Azure Web App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+  ACR_NAME: ${{ vars.AZURE_REGISTRY }}
+  IMAGE_NAME: saleor-dashboard
+  ACR_LOGIN_SERVER: ${{ vars.AZURE_REGISTRY }}.azurecr.io
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-22.04
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and push Docker image
+        run: |
+          docker build . \
+            --tag ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --tag ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest \
+            --build-arg API_URL=${{ vars.API_URL }} \
+            --build-arg APP_MOUNT_URI=${{ vars.APP_MOUNT_URI }} \
+            --build-arg STATIC_URL=${{ vars.STATIC_URL }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          images: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
