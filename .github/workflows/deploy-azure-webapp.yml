@@ -59,7 +59,7 @@ jobs:
           docker push ${{ env.DOCKER_IMAGE }}:latest
 
       - name: Azure Login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
